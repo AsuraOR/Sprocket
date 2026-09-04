@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +31,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import com.example.sprocket.notifications.ReminderScheduler
 import com.example.sprocket.data.model.DistanceUnit
 import com.example.sprocket.data.model.VehicleState
 import com.example.sprocket.theme.SprocketAccent
@@ -48,16 +59,27 @@ import com.example.sprocket.theme.sprocketTopBorder
 fun SetupScreen(
     vehicleState: VehicleState,
     onToggleReminders: () -> Unit,
-    onSetReminderDay: (String) -> Unit,
+    onSetReminderDay: (String) -> Unit = {},
+    onSetReminderDayOfMonth: (Int) -> Unit = {},
     onToggleAlert: (String) -> Unit,
     onSetUnit: (DistanceUnit) -> Unit,
+    onSetCurrencyCode: (String) -> Unit = {},
     onSetThemePreference: (String) -> Unit = {},
     onPreviewNotification: () -> Unit,
     onResetData: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val reminderDays = listOf("1st", "15th", "Last", "Payday")
-    var showResetConfirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            onToggleReminders()
+            ReminderScheduler.schedule(context, vehicleState.reminderDayOfMonth)
+        }
+    }
+    var showResetConfirm by rememberSaveable { mutableStateOf(false) }
+
 
     Box(
         modifier = modifier
@@ -87,7 +109,7 @@ fun SetupScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "One push a month. Type the number off your dash — or photograph it — and every part re-calculates.",
+                        text = "One push a month. Type the number off your dash and every part re-calculates.",
                         fontWeight = FontWeight.Normal,
                         fontSize = 12.5.sp,
                         lineHeight = 18.sp,
@@ -111,20 +133,42 @@ fun SetupScreen(
 
                         ModernistToggle(
                             checked = vehicleState.remindersEnabled,
-                            onToggle = onToggleReminders
+                            onToggle = {
+                                if (vehicleState.remindersEnabled) {
+                                    onToggleReminders()
+                                    ReminderScheduler.cancel(context)
+                                } else {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        onToggleReminders()
+                                        ReminderScheduler.schedule(context, vehicleState.reminderDayOfMonth)
+                                    }
+                                }
+                            }
                         )
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Day selector segmented buttons
+                    // Day selector segmented buttons (Real day of month)
+                    val currentDay = vehicleState.reminderDayOfMonth
+                    val isPreset = currentDay in listOf(1, 15, 28)
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .border(1.dp, SprocketDivider)
                     ) {
-                        reminderDays.forEachIndexed { index, day ->
-                            val isSelected = vehicleState.reminderDay == day
+                        listOf(
+                            1 to "1st",
+                            15 to "15th",
+                            28 to "28th",
+                            -1 to if (!isPreset) "Day $currentDay" else "Custom"
+                        ).forEachIndexed { index, (dayVal, label) ->
+                            val isSelected = if (dayVal == -1) !isPreset else currentDay == dayVal
                             val bg = if (isSelected) SprocketInk else Color.Transparent
                             val fg = if (isSelected) SprocketBg else SprocketInk
 
@@ -133,12 +177,27 @@ fun SetupScreen(
                                     .weight(1f)
                                     .background(bg)
                                     .then(if (index > 0) Modifier.sprocketLeftBorder(SprocketDivider, 1.dp) else Modifier)
-                                    .clickable { onSetReminderDay(day) }
+                                    .clickable {
+                                        if (dayVal == -1) {
+                                            if (isPreset) {
+                                                val newDay = 5
+                                                onSetReminderDayOfMonth(newDay)
+                                                if (vehicleState.remindersEnabled) {
+                                                    ReminderScheduler.schedule(context, newDay)
+                                                }
+                                            }
+                                        } else {
+                                            onSetReminderDayOfMonth(dayVal)
+                                            if (vehicleState.remindersEnabled) {
+                                                ReminderScheduler.schedule(context, dayVal)
+                                            }
+                                        }
+                                    }
                                     .padding(vertical = 10.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = day,
+                                    text = label,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 11.5.sp,
                                     color = fg
@@ -146,6 +205,72 @@ fun SetupScreen(
                             }
                         }
                     }
+
+                    if (!isPreset) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, SprocketDivider)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "DAY OF MONTH",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                letterSpacing = 1.sp,
+                                color = SprocketMuted
+                            )
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .border(1.dp, SprocketDivider)
+                                        .clickable {
+                                            val newDay = (currentDay - 1).coerceIn(1, 31)
+                                            onSetReminderDayOfMonth(newDay)
+                                            if (vehicleState.remindersEnabled) {
+                                                ReminderScheduler.schedule(context, newDay)
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(text = "−", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SprocketInk)
+                                }
+
+                                Spacer(modifier = Modifier.width(14.dp))
+
+                                Text(
+                                    text = currentDay.toString(),
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.sp,
+                                    color = SprocketInk
+                                )
+
+                                Spacer(modifier = Modifier.width(14.dp))
+
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .border(1.dp, SprocketDivider)
+                                        .clickable {
+                                            val newDay = (currentDay + 1).coerceIn(1, 31)
+                                            onSetReminderDayOfMonth(newDay)
+                                            if (vehicleState.remindersEnabled) {
+                                                ReminderScheduler.schedule(context, newDay)
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(text = "+", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = SprocketInk)
+                                }
+                            }
+                        }
+                    }
+
                 }
             }
         }
@@ -235,6 +360,56 @@ fun SetupScreen(
                     ) {
                         Text(
                             text = if (u == DistanceUnit.KM) "KILOMETRES (KM)" else "MILES (MI)",
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 11.5.sp,
+                            letterSpacing = 0.5.sp,
+                            color = fg
+                        )
+                    }
+                }
+            }
+        }
+
+        // CURRENCY Section (F25)
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 6.dp)
+            ) {
+                Text(
+                    text = "CURRENCY",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.5.sp,
+                    letterSpacing = 1.6.sp,
+                    color = SprocketMuted
+                )
+            }
+        }
+
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp)
+                    .border(1.dp, SprocketDivider)
+            ) {
+                listOf("IDR", "USD", "EUR", "GBP").forEachIndexed { index, curr ->
+                    val isSelected = vehicleState.currencyCode == curr
+                    val bg = if (isSelected) SprocketInk else Color.Transparent
+                    val fg = if (isSelected) SprocketBg else SprocketInk
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(bg)
+                            .then(if (index > 0) Modifier.sprocketLeftBorder(SprocketDivider, 1.dp) else Modifier)
+                            .clickable { onSetCurrencyCode(curr) }
+                            .padding(vertical = 11.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = curr,
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 11.5.sp,
                             letterSpacing = 0.5.sp,
@@ -353,19 +528,15 @@ fun SetupScreen(
 
     // Modernist Reset Confirmation Dialog
     if (showResetConfirm) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0x8C201E1D))
-                .clickable { showResetConfirm = false },
-            contentAlignment = Alignment.Center
+        Dialog(
+            onDismissRequest = { showResetConfirm = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
                     .background(SprocketBg)
                     .border(2.dp, SprocketAccent)
-                    .clickable(enabled = false) {}
                     .padding(20.dp)
             ) {
                 Column {
@@ -393,10 +564,11 @@ fun SetupScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        // Cancel gets filled treatment
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .border(1.dp, SprocketDivider)
+                                .background(SprocketInk)
                                 .clickable { showResetConfirm = false }
                                 .padding(vertical = 13.dp),
                             contentAlignment = Alignment.Center
@@ -406,14 +578,15 @@ fun SetupScreen(
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp,
                                 letterSpacing = 0.8.sp,
-                                color = SprocketInk
+                                color = SprocketBg
                             )
                         }
 
+                        // Destructive action gets outline treatment
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .background(SprocketAccent)
+                                .border(1.dp, SprocketAccent)
                                 .clickable {
                                     showResetConfirm = false
                                     onResetData()
@@ -426,7 +599,7 @@ fun SetupScreen(
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp,
                                 letterSpacing = 0.8.sp,
-                                color = SprocketOnAccent
+                                color = SprocketAccent
                             )
                         }
                     }

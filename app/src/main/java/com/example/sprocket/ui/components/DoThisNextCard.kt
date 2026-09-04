@@ -37,11 +37,8 @@ fun DoThisNextCard(
     modifier: Modifier = Modifier
 ) {
     val part = calculation.part
-    val headline = if (calculation.driver == WearDriver.AGE) {
-        "${part.name}\nis ${calculation.remainLabel}\npast due"
-    } else {
-        "${part.name}\nis ${calculation.remainLabel.replace("−", "")}\npast due"
-    }
+    val amount = calculation.remainLabel.removeSuffix(" over").replace("−", "").trim()
+    val headline = "${part.name}\nis $amount\npast due"
 
     Box(
         modifier = modifier

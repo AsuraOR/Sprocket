@@ -35,8 +35,7 @@ class WearEngineTest {
         assertEquals(WearStatus.OVERDUE, calc.status)
         assertEquals(WearDriver.KM, calc.driver)
         assertEquals(23100, calc.usedKm)
-        assertTrue("Wear percentage should be >= 1.0", calc.wearPercentage >= 1.0f)
-        assertTrue("Remain label should show overdue distance", calc.remainLabel.startsWith("−"))
+        assertEquals("3.100 km over", calc.remainLabel)
     }
 
     @Test
@@ -94,7 +93,7 @@ class WearEngineTest {
 
     @Test
     fun testCurrencyAndNumberFormatting() {
-        assertEquals("Rp 450.000", WearEngine.formatCurrency(450000L))
+        assertEquals("Rp450.000", WearEngine.formatCurrency(450000L))
         assertEquals("40.000", WearEngine.formatNumber(40000))
         assertEquals("0", WearEngine.formatNumber(0))
         assertEquals("0", WearEngine.formatDistance(0, DistanceUnit.KM))

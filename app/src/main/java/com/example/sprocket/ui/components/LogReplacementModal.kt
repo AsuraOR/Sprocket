@@ -11,28 +11,32 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sprocket.data.model.DistanceUnit
+import com.example.sprocket.domain.Units
 import com.example.sprocket.data.model.Part
 import com.example.sprocket.domain.WearEngine
 import com.example.sprocket.theme.ArchivoFontFamily
@@ -43,43 +47,53 @@ import com.example.sprocket.theme.SprocketInk
 import com.example.sprocket.theme.SprocketMuted
 import com.example.sprocket.theme.SprocketOnAccent
 
-import com.example.sprocket.theme.sprocketTopBorder
+data class CostPreset(val label: String, val cost: Long)
 
 @Composable
 fun LogReplacementModal(
     part: Part,
     currentOdoKm: Int,
     unit: DistanceUnit,
-    onConfirmLog: (cost: Long, performer: String, odoKm: Int, customNote: String) -> Unit,
+    currencyCode: String = "IDR",
+    onConfirmLog: (cost: Long, performer: String, odoKm: Int, customNote: String, advanceOdometer: Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     val displayCurrentOdo = WearEngine.toDisplayDistance(currentOdoKm, unit)
-    var costText by remember { mutableStateOf(part.standardCost.toString()) }
-    var selectedCost by remember { mutableStateOf(part.standardCost) }
-    var selectedWho by remember { mutableStateOf("Bengkel") }
-    var odoText by remember { mutableStateOf(displayCurrentOdo.toString()) }
-    var customNote by remember { mutableStateOf("") }
+    var costText by rememberSaveable { mutableStateOf(part.standardCost.toString()) }
+    var selectedCost by rememberSaveable { mutableStateOf(part.standardCost) }
+    var selectedWho by rememberSaveable { mutableStateOf("Workshop") }
+    var odoText by rememberSaveable { mutableStateOf(displayCurrentOdo.toString()) }
+    var customNote by rememberSaveable { mutableStateOf("") }
+    var advanceOdometer by rememberSaveable { mutableStateOf(true) }
+
+    val focusManager = LocalFocusManager.current
+    val odoFocusRequester = remember { FocusRequester() }
+    val noteFocusRequester = remember { FocusRequester() }
 
     val presets = remember(part.standardCost) {
-        listOf(75000L, 150000L, 350000L, part.standardCost).distinct().sorted()
+        listOf(
+            CostPreset("0.5×", (part.standardCost * 0.5).toLong()),
+            CostPreset("1×", part.standardCost),
+            CostPreset("1.5×", (part.standardCost * 1.5).toLong())
+        ).filter { it.cost > 0 }
     }
-    val performers = listOf("DIY", "Bengkel", "Dealer")
+    val performers = listOf("DIY", "Workshop", "Dealer")
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SprocketBg)
-            .sprocketTopBorder(SprocketInk, 2.dp)
-            .padding(20.dp)
+    val isDirty = customNote.isNotEmpty() ||
+            costText != part.standardCost.toString() ||
+            selectedCost != part.standardCost ||
+            selectedWho != "Workshop" ||
+            odoText != displayCurrentOdo.toString()
+
+    SprocketSheet(
+        onDismissRequest = onDismiss,
+        isDirty = isDirty
     ) {
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState())
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
                 Text(
                     text = "LOG A REPLACEMENT",
                     fontWeight = FontWeight.ExtraBold,
@@ -111,7 +125,7 @@ fun LogReplacementModal(
 
             // WHAT IT COST
             Text(
-                text = "WHAT IT COST (EDITABLE)",
+                text = "WHAT IT COST (${currencyCode.uppercase()})",
                 fontWeight = FontWeight.Bold,
                 fontSize = 10.sp,
                 letterSpacing = 1.4.sp,
@@ -120,18 +134,21 @@ fun LogReplacementModal(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // Cost readout / editable field
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(2.dp, SprocketInk)
+                    .border(1.dp, SprocketDivider)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Rp",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 18.sp,
+                        text = WearEngine.getCurrencySymbol(currencyCode),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
                         color = SprocketMuted
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -139,7 +156,7 @@ fun LogReplacementModal(
                         value = costText,
                         onValueChange = { newText ->
                             val digits = newText.filter { it.isDigit() }
-                            if (digits.length <= 9) {
+                            if (digits.length <= 10) {
                                 costText = digits
                                 selectedCost = digits.toLongOrNull() ?: 0L
                             }
@@ -147,26 +164,31 @@ fun LogReplacementModal(
                         textStyle = TextStyle(
                             fontFamily = ArchivoFontFamily,
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 26.sp,
-                            letterSpacing = (-0.02).sp,
+                            fontSize = 20.sp,
                             color = SprocketInk
                         ),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Next
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onNext = { odoFocusRequester.requestFocus() }
+                        ),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Cost Presets
+            // Cost Presets (derived from standardCost)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                presets.forEach { cost ->
-                    val isSelected = selectedCost == cost
+                presets.forEach { preset ->
+                    val isSelected = selectedCost == preset.cost
                     val bg = if (isSelected) SprocketInk else Color.Transparent
                     val fg = if (isSelected) SprocketBg else SprocketInk
 
@@ -176,16 +198,16 @@ fun LogReplacementModal(
                             .background(bg)
                             .border(1.dp, SprocketDivider)
                             .clickable {
-                                selectedCost = cost
-                                costText = cost.toString()
+                                selectedCost = preset.cost
+                                costText = preset.cost.toString()
                             }
                             .padding(vertical = 10.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "${cost / 1000}rb",
+                            text = "${preset.label} (${WearEngine.formatCurrency(preset.cost, currencyCode)})",
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 12.sp,
+                            fontSize = 10.5.sp,
                             color = fg
                         )
                     }
@@ -205,7 +227,7 @@ fun LogReplacementModal(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // DIY vs Bengkel vs Dealer
+            // DIY vs Workshop vs Dealer
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -272,9 +294,17 @@ fun LogReplacementModal(
                             fontSize = 16.sp,
                             color = SprocketInk
                         ),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Next
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onNext = { noteFocusRequester.requestFocus() }
+                        ),
                         singleLine = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(odoFocusRequester)
                     )
                     Text(
                         text = unit.label,
@@ -283,6 +313,48 @@ fun LogReplacementModal(
                         color = SprocketMuted
                     )
                 }
+            }
+
+            val enteredOdo = odoText.toIntOrNull() ?: displayCurrentOdo
+            val isOdoHigher = enteredOdo > displayCurrentOdo
+            val isOdoMuchLower = displayCurrentOdo - enteredOdo > 10000
+
+            if (isOdoHigher) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(SprocketDivider.copy(alpha = 0.5f))
+                        .clickable { advanceOdometer = !advanceOdometer }
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .border(1.5.dp, SprocketInk)
+                            .background(if (advanceOdometer) SprocketInk else Color.Transparent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (advanceOdometer) {
+                            Text(text = "✓", color = SprocketBg, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Advance vehicle odometer to ${WearEngine.formatNumber(enteredOdo)} ${unit.label}",
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SprocketInk
+                    )
+                }
+            } else if (isOdoMuchLower) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Notice: Reading is lower than current odometer (${WearEngine.formatNumber(displayCurrentOdo)} ${unit.label}).",
+                    fontSize = 11.sp,
+                    color = SprocketAccent
+                )
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -321,8 +393,17 @@ fun LogReplacementModal(
                         fontSize = 13.sp,
                         color = SprocketInk
                     ),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = { focusManager.clearFocus() }
+                    ),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(noteFocusRequester)
                 )
             }
 
@@ -334,13 +415,8 @@ fun LogReplacementModal(
                     .fillMaxWidth()
                     .background(SprocketAccent)
                     .clickable {
-                        val enteredOdo = odoText.toIntOrNull() ?: displayCurrentOdo
-                        val finalOdoKm = if (unit == DistanceUnit.MI) {
-                            (enteredOdo / unit.toKmFactor).toInt()
-                        } else {
-                            enteredOdo
-                        }
-                        onConfirmLog(selectedCost, selectedWho, finalOdoKm, customNote.trim())
+                        val finalOdoKm = Units.toKm(enteredOdo, unit)
+                        onConfirmLog(selectedCost, selectedWho, finalOdoKm, customNote.trim(), isOdoHigher && advanceOdometer)
                     }
                     .padding(vertical = 16.dp),
                 contentAlignment = Alignment.Center
@@ -353,6 +429,5 @@ fun LogReplacementModal(
                     color = SprocketOnAccent
                 )
             }
-        }
     }
 }

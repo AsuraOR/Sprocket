@@ -20,6 +20,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,16 +57,23 @@ fun SprocketApp(
 ) {
     val parts by repository.parts.collectAsState()
     val history by repository.history.collectAsState()
+    val readings by repository.readings.collectAsState()
     val vehicleState by repository.vehicleState.collectAsState()
     val sortMode by repository.sortMode.collectAsState()
 
-    var currentTab by remember { mutableStateOf(SprocketTab.GARAGE) }
-    var selectedPartId by remember { mutableStateOf<String?>(null) }
-    var showOdometerPad by remember { mutableStateOf(false) }
-    var showLogReplacementPartId by remember { mutableStateOf<String?>(null) }
-    var showEditIntervalPartId by remember { mutableStateOf<String?>(null) }
-    var showAddPart by remember { mutableStateOf(false) }
-    var showLockPreview by remember { mutableStateOf(false) }
+    val monthlyAvgKm = remember(readings, vehicleState) { repository.monthlyAverageKm() }
+
+    val tabSaver = Saver<SprocketTab, String>(
+        save = { it.name },
+        restore = { name -> runCatching { SprocketTab.valueOf(name) }.getOrDefault(SprocketTab.GARAGE) }
+    )
+    var currentTab by rememberSaveable(stateSaver = tabSaver) { mutableStateOf(SprocketTab.GARAGE) }
+    var selectedPartId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showOdometerPad by rememberSaveable { mutableStateOf(false) }
+    var showLogReplacementPartId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showEditIntervalPartId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showAddPart by rememberSaveable { mutableStateOf(false) }
+    var showLockPreview by rememberSaveable { mutableStateOf(false) }
 
     var toastMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -80,12 +89,12 @@ fun SprocketApp(
     }
 
     // Recalculate wear for all parts
-    val calculations = remember(parts, vehicleState) {
+    val calculations = remember(parts, vehicleState, monthlyAvgKm) {
         parts.map { part ->
             WearEngine.calculate(
                 part = part,
                 currentOdometerKm = vehicleState.odometerKm,
-                monthlyAvgKm = vehicleState.monthlyAverageKm,
+                monthlyAvgKm = monthlyAvgKm,
                 unit = vehicleState.unit,
                 soonThreshold = vehicleState.soonThreshold
             )
@@ -103,8 +112,8 @@ fun SprocketApp(
 
     // Calculate dynamic bottom tab subtitles
     val garageSub = "${parts.size} parts"
-    val recordsLast24 = history.filter { WearEngine.calculateMonths(it.year, it.month) <= 24 }
-    val costsSub = WearEngine.formatCurrency(recordsLast24.sumOf { it.cost })
+    val recordsLast24 = history.filter { WearEngine.isWithinMonths(it.year, it.month, 24) }
+    val costsSub = WearEngine.formatCurrency(recordsLast24.sumOf { it.cost }, vehicleState.currencyCode)
     val setupSub = if (vehicleState.remindersEnabled) "${vehicleState.reminderDay} monthly" else "reminders off"
 
     val selectedCalc = calculations.find { it.part.id == selectedPartId }
@@ -141,18 +150,27 @@ fun SprocketApp(
                             onSelectPart = { partId -> selectedPartId = partId },
                             onLogPart = { partId -> showLogReplacementPartId = partId },
                             onSnoozePart = { partId ->
+                                val wakeDate = java.time.LocalDate.now().plusDays(14)
+                                val wakeStr = wakeDate.format(java.time.format.DateTimeFormatter.ofPattern("d MMM")).uppercase()
                                 repository.snoozePart(partId)
-                                showToast("SNOOZED FOR 2 WEEKS")
+                                showToast("SNOOZED UNTIL $wakeStr")
                             },
-                            onOpenAddPart = { showAddPart = true }
+                            onUnsnoozePart = { partId ->
+                                repository.unsnoozePart(partId)
+                                showToast("SNOOZE CANCELLED")
+                            },
+                            onOpenAddPart = { showAddPart = true },
+                            monthlyAvgKm = monthlyAvgKm
                         )
                     }
                     SprocketTab.COSTS -> {
                         CostsScreen(
                             parts = parts,
                             history = history,
-                            monthlyAvgKm = vehicleState.monthlyAverageKm,
-                            unit = vehicleState.unit
+                            monthlyAvgKm = monthlyAvgKm,
+                            unit = vehicleState.unit,
+                            readings = readings,
+                            currencyCode = vehicleState.currencyCode
                         )
                     }
                     SprocketTab.SETUP -> {
@@ -160,8 +178,10 @@ fun SprocketApp(
                             vehicleState = vehicleState,
                             onToggleReminders = { repository.toggleReminders() },
                             onSetReminderDay = { repository.setReminderDay(it) },
+                            onSetReminderDayOfMonth = { repository.setReminderDayOfMonth(it) },
                             onToggleAlert = { repository.toggleAlert(it) },
                             onSetUnit = { repository.setUnit(it) },
+                            onSetCurrencyCode = { repository.setCurrencyCode(it) },
                             onSetThemePreference = { repository.setThemePreference(it) },
                             onPreviewNotification = { showLockPreview = true },
                             onResetData = {
@@ -193,14 +213,23 @@ fun SprocketApp(
                 calc = selectedCalc,
                 history = partHistory,
                 unit = vehicleState.unit,
+                currencyCode = vehicleState.currencyCode,
                 onBack = { selectedPartId = null },
                 onOpenEditInterval = { showEditIntervalPartId = selectedCalc.part.id },
                 onOpenLogReplacement = { showLogReplacementPartId = selectedCalc.part.id },
                 onSnooze = {
+                    val wakeDate = java.time.LocalDate.now().plusDays(14)
+                    val wakeStr = wakeDate.format(java.time.format.DateTimeFormatter.ofPattern("d MMM")).uppercase()
                     repository.snoozePart(selectedCalc.part.id)
                     selectedPartId = null
-                    showToast("SNOOZED FOR 2 WEEKS")
+                    showToast("SNOOZED UNTIL $wakeStr")
                 },
+                onUnsnooze = {
+                    repository.unsnoozePart(selectedCalc.part.id)
+                    selectedPartId = null
+                    showToast("SNOOZE CANCELLED")
+                },
+
                 onDeletePart = {
                     val partName = selectedCalc.part.name.uppercase()
                     repository.deletePart(selectedCalc.part.id)
@@ -212,56 +241,40 @@ fun SprocketApp(
 
         // Odometer Pad Modal Overlay
         if (showOdometerPad) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x8C201E1D))
-                    .clickable { showOdometerPad = false },
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                Box(modifier = Modifier.clickable(enabled = false) {}) {
-                    OdometerPadModal(
-                        currentOdoKm = vehicleState.odometerKm,
-                        monthlyAvgKm = vehicleState.monthlyAverageKm,
-                        unit = vehicleState.unit,
-                        lastReadYear = vehicleState.lastReadYear,
-                        lastReadMonth = vehicleState.lastReadMonth,
-                        recalculatedParts = sortedCalculations,
-                        onSaveOdometer = { newKm ->
-                            repository.updateOdometer(newKm)
-                            showToast("ODOMETER UPDATED TO ${WearEngine.formatDistance(newKm, vehicleState.unit)} ${vehicleState.unit.label.uppercase()}")
-                        },
-                        onDismiss = { showOdometerPad = false }
-                    )
-                }
-            }
+            OdometerPadModal(
+                currentOdoKm = vehicleState.odometerKm,
+                monthlyAvgKm = monthlyAvgKm,
+                unit = vehicleState.unit,
+                lastReadYear = vehicleState.lastReadYear,
+                lastReadMonth = vehicleState.lastReadMonth,
+                recalculatedParts = sortedCalculations,
+                onSaveOdometer = { newKm ->
+                    repository.updateOdometer(newKm)
+                    showToast("ODOMETER UPDATED TO ${WearEngine.formatDistance(newKm, vehicleState.unit)} ${vehicleState.unit.label.uppercase()}")
+                },
+                onDismiss = { showOdometerPad = false }
+            )
         }
 
         // Log Replacement Modal Overlay
         if (showLogReplacementPartId != null) {
             val partToLog = parts.find { it.id == showLogReplacementPartId }
             if (partToLog != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0x8C201E1D))
-                        .clickable { showLogReplacementPartId = null },
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    Box(modifier = Modifier.clickable(enabled = false) {}) {
-                        LogReplacementModal(
-                            part = partToLog,
-                            currentOdoKm = vehicleState.odometerKm,
-                            unit = vehicleState.unit,
-                            onConfirmLog = { cost, who, odoKm, note ->
-                                repository.logReplacement(partToLog.id, cost, who, odoKm, note)
-                                showToast("${partToLog.name.uppercase()} RESET AT ${WearEngine.formatDistance(odoKm, vehicleState.unit)} ${vehicleState.unit.label.uppercase()}")
-                                showLogReplacementPartId = null
-                            },
-                            onDismiss = { showLogReplacementPartId = null }
-                        )
-                    }
-                }
+                LogReplacementModal(
+                    part = partToLog,
+                    currentOdoKm = vehicleState.odometerKm,
+                    unit = vehicleState.unit,
+                    currencyCode = vehicleState.currencyCode,
+                    onConfirmLog = { cost, who, odoKm, note, advanceOdometer ->
+                        repository.logReplacement(partToLog.id, cost, who, odoKm, note)
+                        if (advanceOdometer) {
+                            repository.updateOdometer(odoKm)
+                        }
+                        showToast("${partToLog.name.uppercase()} RESET AT ${WearEngine.formatDistance(odoKm, vehicleState.unit)} ${vehicleState.unit.label.uppercase()}")
+                        showLogReplacementPartId = null
+                    },
+                    onDismiss = { showLogReplacementPartId = null }
+                )
             }
         }
 
@@ -269,55 +282,37 @@ fun SprocketApp(
         if (showEditIntervalPartId != null) {
             val partToEdit = parts.find { it.id == showEditIntervalPartId }
             if (partToEdit != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0x8C201E1D))
-                        .clickable { showEditIntervalPartId = null },
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    Box(modifier = Modifier.clickable(enabled = false) {}) {
-                        EditIntervalModal(
-                            part = partToEdit,
-                            currentOdoKm = vehicleState.odometerKm,
-                            unit = vehicleState.unit,
-                            onSaveInterval = { newKm, newMo ->
-                                repository.updateInterval(partToEdit.id, newKm, newMo)
-                                showToast("INTERVAL UPDATED")
-                                showEditIntervalPartId = null
-                            },
-                            onDismiss = { showEditIntervalPartId = null }
-                        )
-                    }
-                }
+                EditIntervalModal(
+                    part = partToEdit,
+                    currentOdoKm = vehicleState.odometerKm,
+                    unit = vehicleState.unit,
+                    onSaveInterval = { newKm, newMo ->
+                        repository.updateInterval(partToEdit.id, newKm, newMo)
+                        showToast("INTERVAL UPDATED")
+                        showEditIntervalPartId = null
+                    },
+                    onDismiss = { showEditIntervalPartId = null }
+                )
             }
         }
 
         // Add Part Modal Overlay
         if (showAddPart) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0x8C201E1D))
-                    .clickable { showAddPart = false },
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                Box(modifier = Modifier.clickable(enabled = false) {}) {
-                    AddPartModal(
-                        unit = vehicleState.unit,
-                        onAddPart = { name, km, mo, cost ->
-                            repository.addPart(name, km, mo, cost)
-                            showToast("ADDED $name TO GARAGE")
-                        },
-                        onDismiss = { showAddPart = false }
-                    )
-                }
-            }
+            AddPartModal(
+                unit = vehicleState.unit,
+                currencyCode = vehicleState.currencyCode,
+                onAddPart = { name, km, mo, cost ->
+                    repository.addPart(name, km, mo, cost)
+                    showToast("ADDED $name TO GARAGE")
+                },
+                onDismiss = { showAddPart = false }
+            )
         }
 
         // Lock Screen Notification Preview
         if (showLockPreview) {
             LockPreviewModal(
+                partsCalculations = sortedCalculations,
                 onTapNotification = {
                     showLockPreview = false
                     showOdometerPad = true

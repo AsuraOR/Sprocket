@@ -12,6 +12,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.sprocket.domain.WearEngine
+import com.example.sprocket.theme.SprocketInk
 import com.example.sprocket.theme.SprocketNeutral300
 
 @Composable
@@ -23,7 +25,8 @@ fun WearProgressBar(
     height: Dp = 7.dp,
     trackColor: Color = SprocketNeutral300
 ) {
-    val clamped = progress.coerceIn(0f, 1f)
+    val metrics = WearEngine.calculateWearBar(progress)
+    val inkColor = SprocketInk
 
     Canvas(
         modifier = modifier
@@ -32,7 +35,7 @@ fun WearProgressBar(
     ) {
         val totalWidth = size.width
         val barHeight = size.height
-        val fillWidth = totalWidth * clamped
+        val fillWidth = totalWidth * metrics.baseFill
 
         // Draw track
         drawRect(
@@ -68,6 +71,43 @@ fun WearProgressBar(
                             strokeWidth = stripeWidth
                         )
                     }
+                }
+            }
+
+            // Overflow pass overlay when progress > 100% (F22)
+            if (metrics.isOverflowing) {
+                val overflowWidth = totalWidth * metrics.overflowFill
+
+                if (metrics.overflowPasses == 1) {
+                    // First overflow pass (100% - 200%): semi-transparent dark tint + edge tick
+                    drawRect(
+                        color = inkColor.copy(alpha = 0.5f),
+                        size = Size(overflowWidth, barHeight)
+                    )
+                    // Mark the overflow edge line
+                    drawLine(
+                        color = inkColor,
+                        start = Offset(overflowWidth, 0f),
+                        end = Offset(overflowWidth, barHeight),
+                        strokeWidth = 2.5f
+                    )
+                } else {
+                    // Multi-pass overflow (>= 200%): full dark layer for 100-200%, plus second lap overlay
+                    drawRect(
+                        color = inkColor.copy(alpha = 0.5f),
+                        size = Size(totalWidth, barHeight)
+                    )
+                    // Secondary intense overlay for second lap (e.g. 250%)
+                    drawRect(
+                        color = Color.White.copy(alpha = 0.45f),
+                        size = Size(overflowWidth, barHeight)
+                    )
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(overflowWidth, 0f),
+                        end = Offset(overflowWidth, barHeight),
+                        strokeWidth = 2.5f
+                    )
                 }
             }
         }

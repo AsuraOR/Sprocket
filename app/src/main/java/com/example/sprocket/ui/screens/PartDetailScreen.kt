@@ -1,5 +1,6 @@
 package com.example.sprocket.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +34,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.sprocket.data.model.DistanceUnit
 import com.example.sprocket.data.model.ServiceRecord
 import com.example.sprocket.domain.PartWearCalculation
@@ -59,18 +63,23 @@ fun PartDetailScreen(
     calc: PartWearCalculation,
     history: List<ServiceRecord>,
     unit: DistanceUnit,
+    currencyCode: String = "IDR",
     onBack: () -> Unit,
     onOpenEditInterval: () -> Unit,
     onOpenLogReplacement: () -> Unit,
     onSnooze: () -> Unit,
+    onUnsnooze: () -> Unit = {},
     onDeletePart: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val part = calc.part
-    val statusTitle = when (calc.status) {
-        WearStatus.OVERDUE -> if (calc.driver == WearDriver.AGE) "OVERDUE — ON AGE, NOT DISTANCE" else "OVERDUE — ON DISTANCE"
-        WearStatus.DUE_SOON -> if (calc.driver == WearDriver.AGE) "DUE SOON — ON AGE" else "DUE SOON — ON DISTANCE"
-        WearStatus.HEALTHY -> "HEALTHY"
+    val wakeDate = calc.part.snoozedUntilEpochDay?.let { java.time.LocalDate.ofEpochDay(it) }
+    val wakeStr = wakeDate?.format(java.time.format.DateTimeFormatter.ofPattern("d MMM"))?.uppercase() ?: ""
+    val statusTitle = when {
+        calc.part.isSnoozed -> "SNOOZED UNTIL $wakeStr"
+        calc.status == WearStatus.OVERDUE -> if (calc.driver == WearDriver.AGE) "OVERDUE — ON AGE, NOT DISTANCE" else "OVERDUE — ON DISTANCE"
+        calc.status == WearStatus.DUE_SOON -> if (calc.driver == WearDriver.AGE) "DUE SOON — ON AGE" else "DUE SOON — ON DISTANCE"
+        else -> "HEALTHY"
     }
 
     val headBg = when (calc.status) {
@@ -94,7 +103,9 @@ fun PartDetailScreen(
     val intervalLabel = (part.intervalKm?.let { "${WearEngine.formatDistance(it, unit)} ${unit.label}" } ?: "no distance") +
             (part.intervalMonths?.let { " or $it months" } ?: "")
 
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+    BackHandler { onBack() }
+
+    var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -427,7 +438,7 @@ fun PartDetailScreen(
                     }
 
                     Text(
-                        text = WearEngine.formatCurrency(record.cost),
+                        text = WearEngine.formatCurrency(record.cost, currencyCode),
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 13.sp,
                         color = SprocketInk
@@ -475,21 +486,23 @@ fun PartDetailScreen(
                 .navigationBarsPadding()
         ) {
             Row(modifier = Modifier.fillMaxWidth()) {
+                val isSnoozed = calc.part.isSnoozed
                 Box(
                     modifier = Modifier
-                        .clickable { onSnooze() }
+                        .clickable { if (isSnoozed) onUnsnooze() else onSnooze() }
                         .sprocketRightBorder(SprocketDivider, 2.dp)
                         .padding(horizontal = 22.dp, vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "SNOOZE",
+                        text = if (isSnoozed) "CANCEL SNOOZE" else "SNOOZE (14 DAYS)",
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 13.sp,
                         letterSpacing = 0.5.sp,
-                        color = SprocketInk
+                        color = if (isSnoozed) SprocketAccent else SprocketInk
                     )
                 }
+
 
                 Box(
                     modifier = Modifier
@@ -513,19 +526,15 @@ fun PartDetailScreen(
 
     // Modernist Delete Confirmation Dialog
     if (showDeleteConfirm) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0x8C201E1D))
-                .clickable { showDeleteConfirm = false },
-            contentAlignment = Alignment.Center
+        Dialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
                     .background(SprocketBg)
                     .border(2.dp, SprocketAccent)
-                    .clickable(enabled = false) {}
                     .padding(20.dp)
             ) {
                 Column {
@@ -553,10 +562,11 @@ fun PartDetailScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        // Cancel gets filled treatment
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .border(1.dp, SprocketDivider)
+                                .background(SprocketInk)
                                 .clickable { showDeleteConfirm = false }
                                 .padding(vertical = 13.dp),
                             contentAlignment = Alignment.Center
@@ -566,14 +576,15 @@ fun PartDetailScreen(
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp,
                                 letterSpacing = 0.8.sp,
-                                color = SprocketInk
+                                color = SprocketBg
                             )
                         }
 
+                        // Destructive action gets outline treatment
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .background(SprocketAccent)
+                                .border(1.dp, SprocketAccent)
                                 .clickable {
                                     showDeleteConfirm = false
                                     onDeletePart()
@@ -586,7 +597,7 @@ fun PartDetailScreen(
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 12.sp,
                                 letterSpacing = 0.8.sp,
-                                color = SprocketOnAccent
+                                color = SprocketAccent
                             )
                         }
                     }

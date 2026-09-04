@@ -1,5 +1,6 @@
 package com.example.sprocket.ui.components
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sprocket.data.model.DistanceUnit
+import com.example.sprocket.domain.Units
 import com.example.sprocket.domain.PartWearCalculation
 import com.example.sprocket.domain.WearEngine
 import com.example.sprocket.theme.SprocketAccent
@@ -57,35 +60,37 @@ fun OdometerPadModal(
     val displayCurrent = WearEngine.toDisplayDistance(currentOdoKm, unit)
     val displayEstimate = displayCurrent + WearEngine.toDisplayDistance(monthlyAvgKm, unit)
 
-    var entryText by remember { mutableStateOf("") }
-    var scanned by remember { mutableStateOf(false) }
-    var showSavedSummary by remember { mutableStateOf(false) }
-    var showBackwardConfirm by remember { mutableStateOf(false) }
-    var savedOdoKm by remember { mutableStateOf(0) }
+    var entryText by rememberSaveable { mutableStateOf("") }
+    var showSavedSummary by rememberSaveable { mutableStateOf(false) }
+    var showBackwardConfirm by rememberSaveable { mutableStateOf(false) }
+    var savedOdoKm by rememberSaveable { mutableStateOf(0) }
+    var savedPrevOdoKm by rememberSaveable { mutableStateOf(0) }
+    var savedPrevYear by rememberSaveable { mutableStateOf(0) }
+    var savedPrevMonth by rememberSaveable { mutableStateOf(0) }
 
     val enteredValue = entryText.toIntOrNull() ?: 0
     val isCorrection = enteredValue in 1 until displayCurrent
-    val isValid = enteredValue > 0 && enteredValue != displayCurrent
+    val isValid = enteredValue > 0
 
     val hintText = when {
         entryText.isEmpty() -> "Last reading ${WearEngine.formatNumber(displayCurrent)} ${unit.label} — start typing, or take the estimate."
+        enteredValue <= 0 -> "Enter an odometer reading greater than 0 to save."
         isCorrection -> "Lower than last reading (${WearEngine.formatNumber(displayCurrent)} ${unit.label}). Tapping save will ask to confirm correction."
-        scanned -> "Read off your photo — check it against the dash."
+        enteredValue == displayCurrent -> "Same as last reading (${WearEngine.formatNumber(displayCurrent)} ${unit.label}) — advances date and age clocks without adding distance."
         else -> "+${WearEngine.formatNumber(enteredValue - displayCurrent)} ${unit.label} since ${WearEngine.formatDateLabel(lastReadYear, lastReadMonth)}."
     }
 
     val hintColor = if (isCorrection) SprocketAccent else SprocketMuted
     val borderColor = if (isCorrection) SprocketAccent else SprocketInk
 
-    if (showSavedSummary) {
-        // Saved Summary Sheet
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SprocketBg)
-                .sprocketTopBorder(SprocketInk, 2.dp)
-                .padding(20.dp)
-        ) {
+    val isDirty = entryText.isNotEmpty() && !showSavedSummary && !showBackwardConfirm
+
+    SprocketSheet(
+        onDismissRequest = onDismiss,
+        isDirty = isDirty
+    ) {
+        if (showSavedSummary) {
+            // Saved Summary Sheet
             Column {
                 Text(
                     text = "READING SAVED",
@@ -116,9 +121,10 @@ fun OdometerPadModal(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                val delta = savedOdoKm - displayCurrent
+                val delta = savedOdoKm - savedPrevOdoKm
+                val deltaStr = if (delta >= 0) "+${WearEngine.formatNumber(delta)}" else "−${WearEngine.formatNumber(-delta)}"
                 Text(
-                    text = "+${WearEngine.formatNumber(delta)} ${unit.label} since ${WearEngine.formatDateLabel(lastReadYear, lastReadMonth)} · ${recalculatedParts.size} parts recalculated",
+                    text = "$deltaStr ${unit.label} since ${WearEngine.formatDateLabel(savedPrevYear, savedPrevMonth)} · ${recalculatedParts.size} parts recalculated",
                     fontWeight = FontWeight.Normal,
                     fontSize = 12.5.sp,
                     color = SprocketMuted
@@ -190,16 +196,9 @@ fun OdometerPadModal(
                     )
                 }
             }
-        }
-    } else if (showBackwardConfirm) {
-        // Backward Correction Confirmation Sheet
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SprocketBg)
-                .sprocketTopBorder(SprocketAccent, 2.dp)
-                .padding(20.dp)
-        ) {
+        } else if (showBackwardConfirm) {
+            BackHandler { showBackwardConfirm = false }
+            // Backward Correction Confirmation Sheet
             Column {
                 Text(
                     text = "CORRECT ODOMETER BACKWARDS?",
@@ -259,11 +258,10 @@ fun OdometerPadModal(
                             .clickable {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 showBackwardConfirm = false
-                                val finalKm = if (unit == DistanceUnit.MI) {
-                                    (enteredValue / unit.toKmFactor).toInt()
-                                } else {
-                                    enteredValue
-                                }
+                                val finalKm = Units.toKm(enteredValue, unit)
+                                savedPrevOdoKm = displayCurrent
+                                savedPrevYear = lastReadYear
+                                savedPrevMonth = lastReadMonth
                                 savedOdoKm = enteredValue
                                 onSaveOdometer(finalKm)
                                 showSavedSummary = true
@@ -281,16 +279,8 @@ fun OdometerPadModal(
                     }
                 }
             }
-        }
-    } else {
-        // Pad input view
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(SprocketBg)
-                .sprocketTopBorder(SprocketInk, 2.dp)
-                .padding(20.dp)
-        ) {
+        } else {
+            // Pad input view
             Column {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -315,74 +305,41 @@ fun OdometerPadModal(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Input box & scan button
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .border(2.dp, borderColor)
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                // Input box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(2.dp, borderColor)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Bottom
-                        ) {
-                            val textToShow = if (entryText.isEmpty()) {
-                                WearEngine.formatNumber(displayEstimate)
-                            } else {
-                                WearEngine.formatNumber(enteredValue)
-                            }
-                            val textColor = if (entryText.isEmpty()) SprocketNeutral300 else SprocketInk
-
-                            Text(
-                                text = textToShow,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 36.sp,
-                                letterSpacing = (-0.035).sp,
-                                color = textColor
-                            )
-                            Text(
-                                text = unit.label,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 14.sp,
-                                color = SprocketMuted
-                            )
+                        val textToShow = if (entryText.isEmpty()) {
+                            WearEngine.formatNumber(displayEstimate)
+                        } else {
+                            WearEngine.formatNumber(enteredValue)
                         }
-                    }
+                        val textColor = if (entryText.isEmpty()) SprocketNeutral300 else SprocketInk
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // Scan Dash button
-                    Box(
-                        modifier = Modifier
-                            .width(68.dp)
-                            .border(1.dp, SprocketDivider)
-                            .clickable {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                val scannedVal = displayCurrent + WearEngine.toDisplayDistance(612, unit)
-                                entryText = scannedVal.toString()
-                                scanned = true
-                            }
-                            .padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = "📷",
-                                fontSize = 18.sp
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "SCAN",
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 9.sp,
-                                letterSpacing = 1.sp,
-                                color = SprocketAccent
-                            )
-                        }
+                        Text(
+                            text = textToShow,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 36.sp,
+                            letterSpacing = (-0.035).sp,
+                            color = textColor
+                        )
+                        Text(
+                            text = unit.label,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = SprocketMuted
+                        )
                     }
                 }
+
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -403,7 +360,6 @@ fun OdometerPadModal(
                         .clickable {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             entryText = displayEstimate.toString()
-                            scanned = false
                         }
                         .padding(vertical = 11.dp),
                     contentAlignment = Alignment.Center
@@ -449,18 +405,15 @@ fun OdometerPadModal(
                                             when (key) {
                                                 "C" -> {
                                                     entryText = ""
-                                                    scanned = false
                                                 }
                                                 "⌫" -> {
                                                     if (entryText.isNotEmpty()) {
                                                         entryText = entryText.dropLast(1)
-                                                        scanned = false
                                                     }
                                                 }
                                                 else -> {
                                                     if (entryText.length < 7) {
                                                         entryText += key
-                                                        scanned = false
                                                     }
                                                 }
                                             }
@@ -494,11 +447,10 @@ fun OdometerPadModal(
                             if (isCorrection) {
                                 showBackwardConfirm = true
                             } else {
-                                val finalKm = if (unit == DistanceUnit.MI) {
-                                    (enteredValue / unit.toKmFactor).toInt()
-                                } else {
-                                    enteredValue
-                                }
+                                val finalKm = Units.toKm(enteredValue, unit)
+                                savedPrevOdoKm = displayCurrent
+                                savedPrevYear = lastReadYear
+                                savedPrevMonth = lastReadMonth
                                 savedOdoKm = enteredValue
                                 onSaveOdometer(finalKm)
                                 showSavedSummary = true
@@ -507,8 +459,13 @@ fun OdometerPadModal(
                         .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
+                    val saveButtonText = when {
+                        entryText.isEmpty() || enteredValue <= 0 -> "ENTER A READING"
+                        isCorrection -> "CORRECT BACKWARDS →"
+                        else -> "SAVE READING"
+                    }
                     Text(
-                        text = if (isCorrection) "CORRECT BACKWARDS →" else "SAVE READING",
+                        text = saveButtonText,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 14.sp,
                         letterSpacing = 1.sp,

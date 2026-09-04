@@ -62,8 +62,10 @@ fun GarageScreen(
     onSelectPart: (String) -> Unit,
     onLogPart: (String) -> Unit,
     onSnoozePart: (String) -> Unit,
+    onUnsnoozePart: (String) -> Unit = {},
     onOpenAddPart: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    monthlyAvgKm: Int = 560
 ) {
     val needsReading = vehicleState.lastReadMonth != WearEngine.currentMonth ||
             vehicleState.lastReadYear != WearEngine.currentYear
@@ -72,7 +74,9 @@ fun GarageScreen(
     val soonCount = partsCalculations.count { it.status == WearStatus.DUE_SOON }
     val healthyCount = partsCalculations.count { it.status == WearStatus.HEALTHY }
 
-    val topOverdue = partsCalculations.firstOrNull { it.status == WearStatus.OVERDUE && !it.part.isSnoozed }
+    val topOverdue = partsCalculations
+        .filter { it.status == WearStatus.OVERDUE && !it.part.isSnoozed }
+        .maxByOrNull { it.wearPercentage }
 
     LazyColumn(
         modifier = modifier
@@ -144,7 +148,7 @@ fun GarageScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Read ${WearEngine.formatDateLabel(vehicleState.lastReadYear, vehicleState.lastReadMonth)} · averaging ${WearEngine.formatDistance(vehicleState.monthlyAverageKm, vehicleState.unit)} ${vehicleState.unit.label} a month",
+                        text = "Read ${WearEngine.formatDateLabel(vehicleState.lastReadYear, vehicleState.lastReadMonth)} · averaging ${WearEngine.formatDistance(monthlyAvgKm, vehicleState.unit)} ${vehicleState.unit.label} a month",
                         fontWeight = FontWeight.Normal,
                         fontSize = 12.5.sp,
                         color = SprocketMuted
@@ -433,7 +437,29 @@ fun GarageScreen(
                                 color = SprocketMuted,
                                 maxLines = 1
                             )
+
+                            if (calc.part.isSnoozed) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                val wakeDate = calc.part.snoozedUntilEpochDay?.let { java.time.LocalDate.ofEpochDay(it) }
+                                val dateStr = wakeDate?.format(java.time.format.DateTimeFormatter.ofPattern("d MMM"))?.uppercase() ?: ""
+                                Box(
+                                    modifier = Modifier
+                                        .border(1.dp, SprocketMuted)
+                                        .background(SprocketSurface)
+                                        .clickable { onUnsnoozePart(calc.part.id) }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "SNOOZED UNTIL $dateStr  ✕",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 9.sp,
+                                        letterSpacing = 0.8.sp,
+                                        color = SprocketMuted
+                                    )
+                                }
+                            }
                         }
+
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))

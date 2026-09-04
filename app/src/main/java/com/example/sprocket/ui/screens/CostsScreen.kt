@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sprocket.data.model.DistanceUnit
+import com.example.sprocket.data.model.OdometerReading
 import com.example.sprocket.data.model.Part
 import com.example.sprocket.data.model.ServiceRecord
 import com.example.sprocket.domain.WearEngine
@@ -47,6 +48,7 @@ data class RunningCostItem(
 )
 
 data class PartSpendSummary(
+    val partId: String,
     val name: String,
     val count: Int,
     val totalCost: Long
@@ -58,20 +60,33 @@ fun CostsScreen(
     history: List<ServiceRecord>,
     monthlyAvgKm: Int,
     unit: DistanceUnit,
+    readings: List<OdometerReading> = emptyList(),
+    currencyCode: String = "IDR",
     modifier: Modifier = Modifier
 ) {
-    // 24-month spend calculation
-    val recordsLast24 = history.filter {
-        WearEngine.calculateMonths(it.year, it.month) <= 24
+    // Dynamic spend window: months elapsed since first record, capped at 24 (F21)
+    val windowMonths = WearEngine.calculateSpendWindowMonths(history)
+    val recordsInWindow = history.filter {
+        WearEngine.isWithinMonths(it.year, it.month, windowMonths)
     }
-    val totalSpend24 = recordsLast24.sumOf { it.cost }
+    val totalSpend = recordsInWindow.sumOf { it.cost }
 
-    val displayAvg = WearEngine.toDisplayDistance(monthlyAvgKm, unit)
-    val totalDistance24 = displayAvg * 24
-    val spendPer1k = if (totalDistance24 > 0) (totalSpend24.toDouble() / totalDistance24 * 1000).toLong() else 0L
-    val spendPerMonth = totalSpend24 / 24
+    // Distance from real odometer reading delta across the window (F21)
+    val realDeltaKm = WearEngine.calculateRealOdometerDeltaKm(readings, windowMonths)
+    val totalDistance = if (realDeltaKm > 0) {
+        WearEngine.toDisplayDistance(realDeltaKm, unit)
+    } else if (readings.size < 2) {
+        // Fallback for new bikes with fewer than 2 recorded readings
+        val displayAvg = WearEngine.toDisplayDistance(monthlyAvgKm, unit)
+        displayAvg * windowMonths
+    } else {
+        0
+    }
 
-    // Running cost per 1,000 km by part: (standardCost / intervalKm) * 1000
+    val spendPer1k = if (totalDistance > 0) (totalSpend.toDouble() / totalDistance * 1000).toLong() else 0L
+    val spendPerMonth = totalSpend / windowMonths
+
+    // Running cost per 1,000 by part: (standardCost / intervalKm) * 1000
     val runningCosts = parts.filter { (it.intervalKm ?: 0) > 0 }.map { p ->
         val dist = WearEngine.toDisplayDistance(p.intervalKm ?: 1, unit)
         val per1k = if (dist > 0) (p.standardCost.toDouble() / dist * 1000).toLong() else 0L
@@ -88,10 +103,11 @@ fun CostsScreen(
     }
     val totalRunningPer1k = runningCosts.sumOf { it.second }
 
-    // All-time spend grouped by part
+    // All-time spend grouped by part with partId carried through (F26)
     val spendByPart = history.groupBy { it.partId }.map { (partId, records) ->
         val partName = parts.find { it.id == partId }?.name ?: partId
         PartSpendSummary(
+            partId = partId,
             name = partName,
             count = records.size,
             totalCost = records.sumOf { it.cost }
@@ -99,14 +115,14 @@ fun CostsScreen(
     }.sortedByDescending { it.totalCost }
 
     val topExpense = spendByPart.firstOrNull()
-    val topPart = parts.find { it.name == topExpense?.name }
+    val topPart = parts.find { it.id == topExpense?.partId }
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .background(SprocketBg)
     ) {
-        // Spent Last 24 Months Block
+        // Spent Last N Months Block
         item {
             Box(
                 modifier = Modifier
@@ -116,7 +132,7 @@ fun CostsScreen(
             ) {
                 Column {
                     Text(
-                        text = "SPENT ON PARTS · LAST 24 MONTHS",
+                        text = "SPENT ON PARTS · LAST $windowMonths ${if (windowMonths == 1) "MONTH" else "MONTHS"}",
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.5.sp,
                         letterSpacing = 1.6.sp,
@@ -127,7 +143,7 @@ fun CostsScreen(
 
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(
-                            text = "Rp",
+                            text = WearEngine.getCurrencySymbol(currencyCode),
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 20.sp,
                             color = SprocketMuted,
@@ -135,7 +151,7 @@ fun CostsScreen(
                         )
                         Spacer(modifier = Modifier.width(7.dp))
                         Text(
-                            text = WearEngine.formatNumber(totalSpend24),
+                            text = WearEngine.formatNumber(totalSpend),
                             fontWeight = FontWeight.ExtraBold,
                             fontSize = 44.sp,
                             lineHeight = 40.sp,
@@ -147,7 +163,7 @@ fun CostsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = "Rp ${WearEngine.formatNumber(spendPer1k)} per 1.000 ${unit.label} ridden · Rp ${WearEngine.formatNumber(spendPerMonth)} a month",
+                        text = "${WearEngine.formatCurrency(spendPer1k, currencyCode)} per ${WearEngine.formatNumber(1000)} ${unit.label} ridden · ${WearEngine.formatCurrency(spendPerMonth, currencyCode)} a month",
                         fontWeight = FontWeight.Normal,
                         fontSize = 12.5.sp,
                         color = SprocketMuted
@@ -166,14 +182,14 @@ fun CostsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "RUNNING COST PER 1.000 ${unit.label.uppercase()}",
+                    text = "RUNNING COST PER ${WearEngine.formatNumber(1000)} ${unit.label.uppercase()}",
                     fontWeight = FontWeight.Bold,
                     fontSize = 10.5.sp,
                     letterSpacing = 1.6.sp,
                     color = SprocketMuted
                 )
                 Text(
-                    text = "Rp ${WearEngine.formatNumber(totalRunningPer1k)}",
+                    text = WearEngine.formatCurrency(totalRunningPer1k, currencyCode),
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 11.5.sp,
                     color = SprocketInk
@@ -301,7 +317,7 @@ fun CostsScreen(
                 Spacer(modifier = Modifier.width(16.dp))
 
                 Text(
-                    text = WearEngine.formatCurrency(item.totalCost),
+                    text = WearEngine.formatCurrency(item.totalCost, currencyCode),
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 13.5.sp,
                     color = SprocketInk
@@ -319,12 +335,12 @@ fun CostsScreen(
                     .padding(14.dp)
             ) {
                 val line1 = if (topExpense != null) {
-                    "${topExpense.name} is the single biggest line at ${WearEngine.formatCurrency(topExpense.totalCost)}."
+                    "${topExpense.name} is the single biggest line at ${WearEngine.formatCurrency(topExpense.totalCost, currencyCode)}."
                 } else {
                     "No service history logged yet."
                 }
                 val line2 = if (topPart != null) {
-                    " Budget ${WearEngine.formatCurrency(topPart.standardCost)} for the next one."
+                    " Budget ${WearEngine.formatCurrency(topPart.standardCost, currencyCode)} for the next one."
                 } else {
                     ""
                 }

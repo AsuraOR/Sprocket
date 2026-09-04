@@ -18,16 +18,26 @@ data class AlertsConfig(
 )
 
 data class VehicleState(
-    val vehicleName: String = "NMAX '16",
+    val vehicleName: String = "",
     val odometerKm: Int = 0,
-    val prevOdometerKm: Int = 0,
-    val lastReadYear: Int = 2026,
-    val lastReadMonth: Int = 9,
-    val monthlyAverageKm: Int = 560,
+    val lastReadYear: Int = 0,
+    val lastReadMonth: Int = 0,
+    val monthlyAverageOverrideKm: Int? = null,  // null = learn it from readings
     val unit: DistanceUnit = DistanceUnit.KM,
+    val currencyCode: String = "IDR",
     val soonThreshold: Float = 0.80f,
-    val reminderDay: String = "1st",
+    val reminderDayOfMonth: Int = 1,            // replaces the "1st"/"Payday" strings
     val remindersEnabled: Boolean = true,
     val alerts: AlertsConfig = AlertsConfig(),
-    val themePreference: String = "SYSTEM" // "SYSTEM", "LIGHT", "DARK"
-)
+    val themePreference: String = "SYSTEM",
+    val onboardingComplete: Boolean = false
+) {
+    // Backward compatibility helper for UI before Phase 1
+    val reminderDay: String
+        get() = when (reminderDayOfMonth) {
+            1 -> "1st"
+            15 -> "15th"
+            28 -> "Last"
+            else -> "${reminderDayOfMonth}th"
+        }
+}

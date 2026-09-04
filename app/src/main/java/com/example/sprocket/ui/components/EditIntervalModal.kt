@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,8 +48,8 @@ fun EditIntervalModal(
     onSaveInterval: (newKm: Int?, newMo: Int?) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var draftKm by remember { mutableStateOf(part.intervalKm) }
-    var draftMo by remember { mutableStateOf(part.intervalMonths) }
+    var draftKm by rememberSaveable { mutableStateOf(part.intervalKm) }
+    var draftMo by rememberSaveable { mutableStateOf(part.intervalMonths) }
 
     val usedKm = max(0, currentOdoKm - part.lastKm)
     val usedMo = max(0, WearEngine.calculateMonths(part.lastYear, part.lastMonth))
@@ -64,19 +65,17 @@ fun EditIntervalModal(
         "With this interval, ${part.name.lowercase()} sits at ${(np * 100).roundToInt()}% consumed."
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SprocketBg)
-            .sprocketTopBorder(SprocketInk, 2.dp)
-            .padding(20.dp)
+    val isDirty = draftKm != part.intervalKm || draftMo != part.intervalMonths
+
+    SprocketSheet(
+        onDismissRequest = onDismiss,
+        isDirty = isDirty
     ) {
-        Column {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
                 Text(
                     text = "EDIT INTERVAL",
                     fontWeight = FontWeight.ExtraBold,
@@ -250,6 +249,5 @@ fun EditIntervalModal(
                     color = SprocketOnAccent
                 )
             }
-        }
     }
 }
